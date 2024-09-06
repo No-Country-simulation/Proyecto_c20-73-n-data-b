@@ -1,1 +1,5 @@
-# Proyecto_c20-73-n-data-b
+# Proyecto Data y Analytics
+
+## Influencers top 100 por Paises Relevantes
+
+### Introducción
