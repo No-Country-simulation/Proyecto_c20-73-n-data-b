@@ -1,0 +1,100 @@
+Categoria
+
+all countryys Instagram, treads.
+
+import base64
+import pandas as pd
+import io
+
+from google.cloud import storage
+from google.cloud import bigquery
+
+def process_csv(data, context):
+    """
+    Triggered by a change in Cloud Storage. Processes a CSV file, transforms data using Pandas,
+    and loads the results into a BigQuery table.
+
+    Args:
+        data (dict): Metadata for the event that triggered the function.
+        context (google.cloud.functions.Context): Metadata for the event that triggered the function.
+    """
+
+    file_name = data['name']
+    bucket_name = data['bucket']
+
+    # Descargar el archivo desde Cloud Storage y crear un DataFrame
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(file_name)
+    blob_data = blob.download_as_string()
+    df = pd.read_csv(io.StringIO(blob_data.decode('utf-8')))
+
+    def convertir_a_decimal(valor):
+        if isinstance(valor, str):
+            if 'M' in valor:
+                return float(valor.replace('M', '')) * 1_000_000
+            elif 'K' in valor:
+                return float(valor.replace('K', '')) * 1_000
+        try:
+            return float(valor)
+        except ValueError:
+            return None  # Si no se puede convertir, devolver None (valores nulos)
+
+    # Función para convertir porcentajes a decimales
+    def convertir_porcentaje_a_decimal(valor):
+        if isinstance(valor, str) and '%' in valor:
+            try:
+                return float(valor.replace('%', '')) / 1
+            except ValueError:
+                return None
+        try:
+            return float(valor)
+        except ValueError:
+            return None  # Si no se puede convertir, devolver None (valores nulos)
+
+    # Asumiendo que 'df' ya tiene las columnas cargadas desde el CSV
+    # Aplicar las conversiones a las columnas relevantes
+    df['FOLLOWERS'] = df['FOLLOWERS'].apply(convertir_a_decimal)
+    df['POTENTIAL REACH'] = df['POTENTIAL REACH'].apply(convertir_a_decimal)
+    df['ER'] = df['ER'].apply(convertir_porcentaje_a_decimal)
+
+    # Separar la columna 'NAME' en dos columnas, utilizando el carácter '@' como separador
+    df[['NAME', 'USER']] = df['NAME'].str.split(' @', expand=True)
+
+    # Agregar el '@' al inicio de la columna 'USER'
+    df['USER'] = '@' + df['USER']
+
+    # Otras transformaciones posibles:
+    # df['fecha'] = pd.to_datetime(df['fecha_str'])
+    # df['columna_categorica'] = df['columna_categorica'].astype('category')
+
+    # Crear el nombre de la tabla en BigQuery
+    table_name = "clean_" + file_name.replace(".csv", "")
+
+    # Cargar los datos en BigQuery
+    client = bigquery.Client(project="no-country-434723")
+    dataset_ref = client.dataset("udv_nc01")
+    table_ref = dataset_ref.table(table_name)
+
+    schema = [
+    bigquery.SchemaField('#', 'INTEGER'),
+    bigquery.SchemaField('NAME', 'STRING'),
+    bigquery.SchemaField('FOLLOWERS', 'FLOAT'),  # Ajusta a FLOAT si necesitas decimales
+    bigquery.SchemaField('ER', 'FLOAT'),
+    bigquery.SchemaField('COUNTRY', 'STRING'),
+    bigquery.SchemaField('TOPIC OF INFLUENCE', 'STRING'),
+    bigquery.SchemaField('POTENTIAL REACH', 'FLOAT'),  # Ajusta a FLOAT si necesitas decimales
+    bigquery.SchemaField('USER', 'STRING')
+    ]
+
+    job_config = bigquery.LoadJobConfig(
+        source_format=bigquery.SourceFormat.CSV,
+        #skip_leading_rows=1,
+        autodetect=False,
+        schema=schema
+    )
+
+    job = client.load_table_from_dataframe(df, table_ref, job_config=job_config)
+    job.result()
+
+    print(f"Carga a BigQuery completada. Tabla: {table_name}")
